@@ -1,0 +1,8 @@
+streamlit
+yfinance
+pandas
+numpy-financial
+numpy
+requests
+streamlit-local-storage
+plotly
