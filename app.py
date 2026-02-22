@@ -273,28 +273,28 @@ st.sidebar.markdown("### Zeitraum & Schnellauswahl")
 min_allowed_date = datetime.date(1900, 1, 1)
 
 # Schnellauswahl Buttons
-today_date = date.today()
+today = date.today()
 col_q1, col_q2 = st.sidebar.columns(2)
 col_q3, col_q4 = st.sidebar.columns(2)
 
 if col_q1.button("1 Jahr", key=f"1y_{safe_ticker}"):
-    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today_date - timedelta(days=365))
-    st.session_state[f"enddate_{safe_ticker}"] = today_date
+    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today - timedelta(days=365))
+    st.session_state[f"enddate_{safe_ticker}"] = today
     st.rerun()
 
 if col_q2.button("3 Jahre", key=f"3y_{safe_ticker}"):
-    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today_date - timedelta(days=3*365))
-    st.session_state[f"enddate_{safe_ticker}"] = today_date
+    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today - timedelta(days=3*365))
+    st.session_state[f"enddate_{safe_ticker}"] = today
     st.rerun()
 
 if col_q3.button("5 Jahre", key=f"5y_{safe_ticker}"):
-    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today_date - timedelta(days=5*365))
-    st.session_state[f"enddate_{safe_ticker}"] = today_date
+    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today - timedelta(days=5*365))
+    st.session_state[f"enddate_{safe_ticker}"] = today
     st.rerun()
 
 if col_q4.button("10 Jahre", key=f"10y_{safe_ticker}"):
-    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today_date - timedelta(days=10*365))
-    st.session_state[f"enddate_{safe_ticker}"] = today_date
+    st.session_state[f"startdate_{safe_ticker}"] = max(oldest_available_date, today - timedelta(days=10*365))
+    st.session_state[f"enddate_{safe_ticker}"] = today
     st.rerun()
 
 if st.sidebar.button("📅 Frühestes Datum setzen", key=f"min_{safe_ticker}"):
@@ -476,4 +476,206 @@ if selected_ticker and not hist_df.empty:
             b_df = b_df[(b_df.index.date >= start_date) & (b_df.index.date <= end_date)].copy()
             if not b_df.empty:
                 b_shares, b_vals = 0.0, []
-                for d_b, row_b in b_df.iter
+                # FIX FÜR ZEILE 479 (iterrows anstatt iter)
+                for d_b, row_b in b_df.iterrows():
+                    p_b = float(row_b['Close'])
+                    inv_b = start_capital if len(b_vals) == 0 else monthly_rate
+                    b_shares += (inv_b / p_b)
+                    b_vals.append(b_shares * p_b)
+                chart_df[b_name] = pd.Series(b_vals, index=b_df.index).reindex(dates, method='ffill')
+
+        # --- PLOTLY DUAL Y-AXIS CHART (SORTIERT) ---
+        fig = go.Figure()
+        
+        portfolio_colors = {
+            "Thesaurierend (Mit Reinvest)": "#228B22", # Dunkleres Grün
+            "Ausschüttend (Ohne Reinvest)": "#90EE90", # Helles Grün
+            "Eingezahltes Kapital": "#808080"        # Grau
+        }
+        
+        # LOGIK FÜR ABSTEIGENDE SORTIERUNG (Nach dem Wert der letzten Zeile)
+        sorted_cols = chart_df.iloc[-1].sort_values(ascending=False).index
+        
+        for col in sorted_cols:
+            line_style = dict(width=2)
+            if col in portfolio_colors:
+                line_style['color'] = portfolio_colors[col]
+            
+            fig.add_trace(go.Scatter(
+                x=chart_df.index, y=chart_df[col], mode='lines', name=col,
+                line=line_style,
+                hovertemplate=f'<b>{col}</b>: %{{y:,.2f}} €<extra></extra>' 
+            ))
+
+        # Trace für reinen Aktienkurs (Y-Achse Rechts) - Neon Blau
+        fig.add_trace(go.Scatter(
+            x=df_filtered.index, y=df_filtered['Close'], mode='lines', 
+            name=f"Kurs: {selected_ticker}", yaxis="y2",
+            line=dict(color="#00FFFF", width=1.5, dash="dot"), # Neon Blau
+            hovertemplate=f'<b>Kurs ({selected_ticker})</b>: %{{y:,.2f}} €<extra></extra>'
+        ))
+
+        fig.update_layout(
+            hovermode="x unified", separators=',.',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=0, r=0, t=50, b=0),
+            template="plotly_dark", height=650,
+            
+            yaxis=dict(
+                title="Kapitalentwicklung (€)", showgrid=True, gridcolor="#333", 
+                tickformat=',.2f', autorange=True, fixedrange=False, rangemode="nonnegative"
+            ),
+            
+            yaxis2=dict(
+                title="Aktienkurs (€)", overlaying="y", side="right", 
+                showgrid=False, tickformat=',.2f', autorange=True, fixedrange=False
+            ),
+            
+            xaxis=dict(
+                showgrid=True, gridcolor="#333", rangeslider_visible=True,
+                rangeselector=dict(buttons=list([
+                    dict(count=1, label="1j", step="year", stepmode="backward"),
+                    dict(count=5, label="5j", step="year", stepmode="backward"),
+                    dict(step="all", label="Alles")
+                ]), bgcolor="#1e1e1e")
+            )
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- TABS FÜR HISTORIE UND MATRIX ---
+        st.write("")
+        monate_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+        # NUR TABS ANZEIGEN WENN ES DIVIDENDEN GAB
+        if total_divs_net_no_reinv > 0:
+            tab1, tab2 = st.tabs(["💸 Ohne Reinvestition (Ausschüttend)", "🔄 Mit Reinvestition (Thesaurierend)"])
+
+            with tab1:
+                c1, c2, c3, c4, c5 = st.columns(5) 
+                c1.metric("Endkapital", f"{end_cap_no:,.2f} €", f"{end_cap_no - invested_brutto:,.2f} € Kursgewinn")
+                c2.metric("Anteile (Gesamt)", f"{shares_no_reinv:,.4f}", "(Alle aus Einzahlungen)", delta_color="off")
+                c3.metric("Auszahlungen (Netto)", f"+ {total_divs_net_no_reinv:,.2f} €")
+                c4.metric("IZF (p.a.)", f"{irr_no:.2f} %")
+                c5.metric("TTWROR", f"{ttwror_v:.2f} %")
+                
+                st.write("### Jahreshistorie (Ausschüttend)")
+                df_y_no = pd.DataFrame.from_dict(yearly_stats, orient='index')[["Start_No", "End_No", "Div_No"]]
+                df_y_no.columns = ["Startkapital", "Endkapital", "Dividende (Netto)"]
+                st.dataframe(df_y_no.style.format("{:,.2f} €"), width="stretch")
+                
+                st.write("### Dividenden Kalender (Ausschüttend)")
+                if div_data_for_table:
+                    df_t = pd.DataFrame(div_data_for_table)
+                    pivot_t = df_t.pivot_table(index='Jahr', columns='Monat', values='Betrag', aggfunc='sum').fillna(0)
+                    pivot_t = pivot_t.reindex(columns=[m for m in monate_order if m in pivot_t.columns])
+                    pivot_t['Gesamt'] = pivot_t.sum(axis=1)
+                    st.dataframe(pivot_t.style.format("{:.2f} €"), width="stretch")
+                
+            with tab2:
+                c1, c2, c3, c4, c5 = st.columns(5) 
+                c1.metric("Endkapital", f"{end_cap_re:,.2f} €", f"{end_cap_re - invested_brutto:,.2f} € Gesamtgewinn")
+                c2.metric("Anteile (Gesamt)", f"{shares_reinv:,.4f}", f"({shares_no_reinv:,.4f} Einz. | {(shares_reinv - shares_no_reinv):,.4f} Div.)", delta_color="off")
+                c3.metric("Reinvestiert (Netto)", f"{total_divs_net_reinv:,.2f} €")
+                c4.metric("IZF (p.a.)", f"{irr_re:.2f} %")
+                c5.metric("TTWROR", f"{ttwror_v:.2f} %")
+                
+                st.write("### Jahreshistorie (Thesaurierend)")
+                df_y_re = pd.DataFrame.from_dict(yearly_stats, orient='index')[["Start_Re", "End_Re", "Div_Re"]]
+                df_y_re.columns = ["Startkapital", "Endkapital", "Reinvestiert (Netto)"]
+                st.dataframe(df_y_re.style.format("{:,.2f} €"), width="stretch")
+                
+                st.write("### Dividenden Kalender (Thesaurierend)")
+                if div_data_re_for_table:
+                    df_t_re = pd.DataFrame(div_data_re_for_table)
+                    pivot_t_re = df_t_re.pivot_table(index='Jahr', columns='Monat', values='Betrag', aggfunc='sum').fillna(0)
+                    pivot_t_re = pivot_t_re.reindex(columns=[m for m in monate_order if m in pivot_t_re.columns])
+                    pivot_t_re['Gesamt'] = pivot_t_re.sum(axis=1)
+                    st.dataframe(pivot_t_re.style.format("{:.2f} €"), width="stretch")
+
+            # --- DIVIDENDEN MATRIX GESAMT ---
+            st.subheader("Dividenden Kalender (Gesamt-Übersicht)")
+            if div_data_for_table:
+                df_total = pd.DataFrame(div_data_for_table)
+                pivot_total = df_total.pivot_table(index='Jahr', columns='Monat', values='Betrag', aggfunc='sum').fillna(0)
+                pivot_total = pivot_total.reindex(columns=[m for m in monate_order if m in pivot_total.columns])
+                pivot_total['Gesamt'] = pivot_total.sum(axis=1)
+                st.dataframe(pivot_total.style.format("{:.2f} €"), width="stretch")
+                
+        else:
+            # WENN KEINE DIVIDENDEN GEZAHLT WURDEN (NUR EIN TAB ANZEIGEN)
+            tab1 = st.tabs(["📈 Portfolio Historie"])[0]
+            
+            with tab1:
+                c1, c2, c3, c4 = st.columns(4) 
+                c1.metric("Endkapital", f"{end_cap_no:,.2f} €", f"{end_cap_no - invested_brutto:,.2f} € Kursgewinn")
+                c2.metric("Anteile (Gesamt)", f"{shares_no_reinv:,.4f}", "(Alle aus Einzahlungen)", delta_color="off")
+                c3.metric("IZF (p.a.)", f"{irr_no:.2f} %")
+                c4.metric("TTWROR", f"{ttwror_v:.2f} %")
+                
+                st.write("### Jahreshistorie")
+                df_y_no = pd.DataFrame.from_dict(yearly_stats, orient='index')[["Start_No", "End_No"]]
+                df_y_no.columns = ["Startkapital", "Endkapital"]
+                st.dataframe(df_y_no.style.format("{:,.2f} €"), width="stretch")
+
+        # =====================================================================
+        # NEU: ROLLIERENDE DEKADEN-RENDITE
+        # =====================================================================
+        st.markdown("---")
+        st.subheader("🔁 Rollierende 10-Jahres-Renditen (Buy & Hold)")
+        st.write("Zeigt die jährliche Rendite (CAGR), wenn das Asset jeweils am ersten Tag eines Jahres gekauft und exakt 10 Jahre gehalten worden wäre (inklusive fiktiver Reinvestition der Netto-Dividenden).")
+
+        if not df_filtered.empty:
+            # Konstruiere einen sauberen Total Return Index (TRI) für das Basis-Asset
+            tri_dates = []
+            tri_vals = []
+            current_tri_shares = 100.0 / float(df_filtered.iloc[0]['Close']) if float(df_filtered.iloc[0]['Close']) > 0 else 0
+            
+            for d, row in df_filtered.iterrows():
+                p = float(row['Close'])
+                div = float(row['Dividends'])
+                
+                if p > 0 and div > 0:
+                    current_tri_shares += (current_tri_shares * div * tax_multiplier) / p
+                    
+                tri_dates.append(d)
+                tri_vals.append(current_tri_shares * p)
+                
+            df_tri = pd.DataFrame({"TRI": tri_vals}, index=tri_dates)
+            df_tri['Year'] = df_tri.index.year
+            
+            # Den ersten verfügbaren Wert jedes Jahres holen
+            yearly_start_vals = df_tri.groupby('Year').first()['TRI']
+            
+            rolling_data = []
+            unique_years = sorted(df_tri['Year'].unique())
+            
+            for y in unique_years:
+                target_y = y + 10 # Wir prüfen auf exakt 10 Jahre Abstand (z.B. Start 2005 -> Start 2015)
+                
+                if target_y in unique_years:
+                    val_start = yearly_start_vals[y]
+                    val_end = yearly_start_vals[target_y]
+                    
+                    if val_start > 0:
+                        total_ret = (val_end / val_start) - 1
+                        cagr = ((val_end / val_start) ** (1/10)) - 1
+                        
+                        rolling_data.append({
+                            "Zeitraum": f"{y} bis {target_y}",
+                            "Gesamtrendite": total_ret * 100,
+                            "Rendite p.a. (CAGR)": cagr * 100
+                        })
+                    
+            if rolling_data:
+                df_rolling = pd.DataFrame(rolling_data)
+                st.dataframe(
+                    df_rolling.style.format({
+                        "Gesamtrendite": "{:+.2f} %",
+                        "Rendite p.a. (CAGR)": "{:+.2f} %"
+                    }),
+                    width="stretch",
+                    hide_index=True
+                )
+            else:
+                st.info("Die gewählte Historie ist zu kurz. Für diese Auswertung werden mindestens 10 zusammenhängende Jahre benötigt.")
